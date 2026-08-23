@@ -9,13 +9,11 @@ import { Cart } from '@/utils/type';
 
 
 function CartTotals({ cart }: { cart: Cart }) {
-  const { cartTotal, shipping, tax, orderTotal } = cart;
+  const { cartTotal,  orderTotal } = cart;
   return (
     <div>
       <Card className='p-8'>
         <CartTotalRow label='Subtotal' amount={cartTotal} />
-        <CartTotalRow label='Shipping' amount={shipping} />
-        {/* <CartTotalRow label='Tax' amount={tax} /> */}
         <CardTitle className='mt-8'>
           <CartTotalRow label='Order Total' amount={orderTotal} lastRow />
         </CardTitle>
