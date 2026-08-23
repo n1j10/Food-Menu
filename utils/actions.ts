@@ -1,7 +1,7 @@
 "use server"
 import { redirect } from "next/navigation";
 import db from "./db";
-import { currentUser } from "@clerk/nextjs/server";
+import { auth, currentUser } from "@clerk/nextjs/server";
 import { categorySchema, imageSchema, productSchema, reviewSchema, validateFuctionSchema } from "./schema";
 import { deleteImage, uploadImage } from "./supabase";
 import { revalidatePath } from "next/cache";
@@ -46,6 +46,9 @@ export async function fetchSingleProduct(productID: string) {
     where: {
       id: productID
     },
+    include: {
+      category: true
+    }
   });
   if (!product) {
     redirect('/products')
@@ -55,8 +58,13 @@ export async function fetchSingleProduct(productID: string) {
 }
 
 const getAuthUser = async () => {
-  const user = await currentUser();
+  const { userId } = await auth();
 
+  if (!userId) {
+    return redirect("/")
+  }
+
+  const user = await currentUser();
   if (!user) {
     return redirect("/")
   }
@@ -78,6 +86,11 @@ export async function createProductAction(prevState: any, formData: FormData): P
 
     const validatedFields = validateFuctionSchema(productSchema, rowData)
     const validateImage = validateFuctionSchema(imageSchema, { image: fileImage })
+
+    const categoryTitle = validatedFields.categoryId;
+    const category = await db.category.findUnique({ where: { title: categoryTitle } });
+    if (!category) throw new Error("Category not found");
+    validatedFields.categoryId = category.id;
 
     const fullImagePath = await uploadImage(validateImage.image);
 
@@ -156,7 +169,10 @@ export const updateProductAction = async (prevState: any, formData: FormData) =>
 
     const validateData = validateFuctionSchema(productSchema, rawData);
 
-
+    const categoryTitle = validateData.categoryId;
+    const category = await db.category.findUnique({ where: { title: categoryTitle } });
+    if (!category) throw new Error("Category not found");
+    validateData.categoryId = category.id;
 
     await db.product.update({
       where: {
@@ -213,13 +229,13 @@ export const updateProductImageAction = async (prevState: any, formData: FormDat
 // fetch faveroit 
 
 export const fetchFavoritID = async (productID: string) => {
-  const user = await currentUser();
-  if (!user) return null;
+  const { userId } = await auth();
+  if (!userId) return null;
   const fav = await db.favorite.findFirst({
 
     where: {
       productId: productID,
-      clerkId: user.id,
+      clerkId: userId,
     },
     select: {
       id: true,
@@ -343,11 +359,11 @@ export const fetchAllReviews = async () => {
 // ================= Cart Actions =================
 
 export const fetchCartItems = async () => {
-  const user = await currentUser();
-  if (!user) return 0;
+  const { userId } = await auth();
+  if (!userId) return 0;
   const cart = await db.cart.findFirst({
     where: {
-      clerkId: user.id,
+      clerkId: userId,
     },
     select: {
       numItemsInCart: true,

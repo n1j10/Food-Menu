@@ -1,32 +1,18 @@
-import { clerkMiddleware, createRouteMatcher} from '@clerk/nextjs/server';
+import { clerkMiddleware } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 
+export default clerkMiddleware(async (auth, req) => {
+  const { pathname } = req.nextUrl;
 
-const isPublicRoute = createRouteMatcher(['/','/about','/products(.*)','/sign-in(.*)','/sign-up(.*)',
-  '/checkout(.*)',
-  '/payment-result(.*)',
-  // ZainCash calls these server-to-server; their JWT is verified in the route handlers.
-  '/api/payment/callback(.*)',
-  '/api/payment/webhook(.*)',
-]);
-const isAdminRoute = createRouteMatcher(['/admin(.*)']);
-
-
-
-export default clerkMiddleware(async(auth, req) => {
-  const { userId } = await auth();
-  const isAdmin = userId === process.env.ADMIN_USER_ID;
-
-  if (!isPublicRoute(req)) {
-    await auth.protect()
-  }
-
-  if (isAdminRoute(req) && !isAdmin) {
-    return NextResponse.redirect(new URL('/', req.url));
+  // Protect admin routes
+  if (pathname.startsWith('/admin')) {
+    const { userId } = await auth();
+    const isAdmin = userId === process.env.ADMIN_USER_ID;
+    if (!isAdmin) {
+      return NextResponse.redirect(new URL('/', req.url));
+    }
   }
 });
-
-  
 
 export const config = {
   matcher: [
@@ -38,28 +24,3 @@ export const config = {
     '/(api|trpc)(.*)',
   ],
 };
-
-
-
-
-
-
-
-
-
-// const isPublicRoute = createRouteMatcher([ '/','/about','/products','/sign-in(.*)','/sign-up(.*)']);  
-// const isAdminRoute = createRouteMatcher(['/admin(.*)']);
-
-
-
-// export default clerkMiddleware(async(auth, req) => {
-//   const isAdmin = (await auth()).userId === process.env.ADMIN_USER_ID;
-
-//   if (!isPublicRoute(req)) {
-//     await auth.protect()
-//   }
-// if (isAdminRoute(req) && !isAdmin ) {
-//    return NextResponse.redirect(new URL("/", req.url))
-//   }
-
-// });

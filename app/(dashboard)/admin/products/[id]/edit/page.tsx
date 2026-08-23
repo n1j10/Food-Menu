@@ -15,7 +15,7 @@ interface EditParamsProps {
 async function EditProductPage({ params }: EditParamsProps) {
   const { id } = await params;
   const product = await fetchSingleProduct(id);
-  const { name, description, price, featured, image, categoryId } = product;
+  const { name, description, price, featured, image, category } = product;
   return (
 
     <section className=' w-3xl'>
@@ -46,7 +46,7 @@ async function EditProductPage({ params }: EditParamsProps) {
               defaultValue={name}
             />
             <PriceInput defaultValue={price} />
-            <CategoryInput defaultValue={categoryId} />
+            <CategoryInput defaultValue={category?.title} />
             <TextAreaInput
               name='description'
               labelText='Description'
