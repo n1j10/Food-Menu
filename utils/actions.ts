@@ -1,12 +1,11 @@
 "use server"
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 import db from "./db";
 import { auth, currentUser } from "@clerk/nextjs/server";
-import { categorySchema, imageSchema, productSchema, reviewSchema, validateFuctionSchema } from "./schema";
+import { cartAmountSchema, categorySchema, idSchema, imageSchema, productSchema, reviewSchema, validateFuctionSchema } from "./schema";
 import { deleteImage, uploadImage } from "./supabase";
 import { revalidatePath } from "next/cache";
 import { links } from "./links";
-import { Cart } from "@/utils/type";
 
 
 //fetch all featured products
@@ -71,15 +70,27 @@ const getAuthUser = async () => {
   return user;
 }
 
-const renderError = (error: unknown): { message: string } => { //check error mesage 
-  return {
-    message: error instanceof Error ? error.message : "Unknown Error"
+const renderError = (error: unknown): { message: string } => { //check error mesage
+  // let redirect() / notFound() thrown inside try/catch keep working
+  unstable_rethrow(error);
+  // never leak database internals (table/column names, query details) to the client
+  if (error instanceof Error && !error.constructor.name.startsWith("Prisma")) {
+    return { message: error.message };
   }
+  console.error(error);
+  return { message: "Something went wrong, please try again" };
 }
+
+//AdminUser
+const getAdminUser = async () => {
+  const user = await getAuthUser();
+  if (user.id !== process.env.ADMIN_USER_ID) redirect('/');
+  return user;
+};
 
 // fuc connect with zod to make validate to info
 export async function createProductAction(prevState: any, formData: FormData): Promise<{ message: string }> {
-  const user = await getAuthUser();
+  const user = await getAdminUser();
   try {
     const rowData = Object.fromEntries(formData); // validate for all form input without image
     const fileImage = formData.get('image') as File;
@@ -110,17 +121,9 @@ export async function createProductAction(prevState: any, formData: FormData): P
   }
 };
 
-//AdminUser
-const getAdminUser = async () => {
-  const user = await getAuthUser();
-  if (user.id !== process.env.ADMIN_USER_ID) redirect('/');
-  return user;
-};
-
 //fetch admin posts
 export const fetchAdminPosts = async () => {
-  await getAdminUser();
-  const user = await getAuthUser();
+  const user = await getAdminUser();
   const products = await db.product.findMany({
     where: {
       clerkId: user.id
@@ -147,7 +150,7 @@ export const deleteProductAction = async (prevState: { productId: string }) => {
       },
     });
     await deleteImage(product.image);
-    // revalidatePath('/admin/products');
+    revalidatePath('/admin/products');
 
     return { message: 'product removed' };
 
@@ -179,7 +182,11 @@ export const updateProductAction = async (prevState: any, formData: FormData) =>
         id: productId,
       },
       data: {
-        ...validateData,
+        name: validateData.name,
+        description: validateData.description,
+        price: validateData.price,
+        featured: validateData.featured,
+        categoryId: validateData.categoryId,
       },
     });
 
@@ -196,17 +203,21 @@ export const updateProductAction = async (prevState: any, formData: FormData) =>
 //image update action 
 export const updateProductImageAction = async (prevState: any, formData: FormData) => {
 
-  await getAuthUser();
+  await getAdminUser();
   try {
     const image = formData.get('image') as File;
-    const productId = formData.get('id') as string;
-    const oldImageUrl = formData.get('url') as string;
+    const productId = validateFuctionSchema(idSchema, formData.get('id'));
 
     const validateImageFile = validateFuctionSchema(imageSchema, { image });
 
+    // the old image comes from the database, never from the form,
+    // so a crafted request can't delete arbitrary files from the bucket
+    const product = await db.product.findUnique({ where: { id: productId }, select: { image: true } });
+    if (!product) throw new Error("Product not found");
+
     const fullImagePath = await uploadImage(validateImageFile.image);
 
-    await deleteImage(oldImageUrl);
+    await deleteImage(product.image);
     await db.product.update({
       where: {
         id: productId,
@@ -256,21 +267,23 @@ export const toggleFavAction = async (prevState: toggleFavActionProps) => {
   const { productID, FavoriteID } = prevState;
   try {
     if (FavoriteID) {
-      await db.favorite.delete({
+      // scoped to the signed-in user: a user can only remove their own favorites
+      await db.favorite.deleteMany({
         where: {
           id: FavoriteID,
+          clerkId: user.id,
         }
       })
     }
     else {
       await db.favorite.create({
         data: {
-          productId: productID,
+          productId: validateFuctionSchema(idSchema, productID),
           clerkId: user.id,
         }
       })
     }
-    revalidatePath("");
+    revalidatePath("/", "layout");
 
     return { message: FavoriteID ? 'removed from favorite' : 'added to favorite' };
 
@@ -308,9 +321,13 @@ export const creatReviewAction = async (prevState: any, formData: FormData) => {
       return { message: "Error" + errors?.join(",") };
     }
 
+    // author identity comes from Clerk on the server, not from the form,
+    // so nobody can post a review under someone else's name or avatar
     await db.review.create({
       data: {
         ...validatedFields.data,
+        authorName: user.firstName || user.username || "Customer",
+        authorImageUrl: user.imageUrl,
         clerkId: user.id,
       },
     });
@@ -380,7 +397,9 @@ const includeProductClause = {
   },
 };
 
-export const fetchOrCreateCart = async ({ userId, errorOnFailure = false, }: { userId: string; errorOnFailure?: boolean; }) => {
+// internal helpers: NOT exported, because every export of a "use server" file
+// becomes a public endpoint and these take a userId / cart from the caller
+const fetchOrCreateCart = async ({ userId, errorOnFailure = false, }: { userId: string; errorOnFailure?: boolean; }) => {
   let cart = await db.cart.findFirst({
     where: {
       clerkId: userId,
@@ -424,7 +443,7 @@ const updateOrCreateCartItem = async ({ productId, cartId, amount, }: { productI
   }
 };
 
-export const updateCart = async (cart: Cart) => {
+const updateCart = async (cart: { id: string }) => {
 
   const cartItems = await db.cartItem.findMany({
     where: {
@@ -462,13 +481,18 @@ export const updateCart = async (cart: Cart) => {
   return { cartItems, currentCart };
 };
 
-
+// cart of the signed-in user, with totals recalculated from current prices
+export const fetchUserCart = async () => {
+  const user = await getAuthUser();
+  const cart = await fetchOrCreateCart({ userId: user.id });
+  return updateCart(cart);
+};
 
 export const addToCartAction = async (prevState: any, formData: FormData) => {
   const user = await getAuthUser();
   try {
-    const productId = formData.get("productId") as string;
-    const amount = Number(formData.get("amount"));
+    const productId = validateFuctionSchema(idSchema, formData.get("productId"));
+    const amount = validateFuctionSchema(cartAmountSchema, formData.get("amount"));
     await fetchSingleProduct(productId);
     const cart = await fetchOrCreateCart({ userId: user.id });
     await updateOrCreateCartItem({ productId, cartId: cart.id, amount });
@@ -521,7 +545,7 @@ export const updateCartItemAction = async ({
         cartId: cart.id,
       },
       data: {
-        amount,
+        amount: validateFuctionSchema(cartAmountSchema, amount),
       },
     });
     await updateCart(cart);
@@ -566,18 +590,20 @@ export const createOrderAction = async (prevState: any, formData: FormData) => {
         throw new Error("Cart is empty");
       }
 
-      await db.order.createMany({
-        data: cart.cartItems.map((item) => ({
-          clerkId: user.id,
-          productId: item.productId,
-          products: item.amount,
-          orderTotal: item.amount * item.product.price,
-        })),
-      });
-
-      await db.cart.delete({
-        where: { id: cart.id },
-      });
+      // atomic: orders are created and the cart is cleared together, or not at all
+      await db.$transaction([
+        db.order.createMany({
+          data: cart.cartItems.map((item) => ({
+            clerkId: user.id,
+            productId: item.productId,
+            products: item.amount,
+            orderTotal: item.amount * item.product.price,
+          })),
+        }),
+        db.cart.delete({
+          where: { id: cart.id },
+        }),
+      ]);
     }
   } catch (error) {
     return renderError(error);
@@ -740,14 +766,16 @@ export const updateCategoryImageAction = async (prevState: any, formData: FormDa
   await getAdminUser();
   try {
     const image = formData.get('image') as File;
-    const categoryId = formData.get('id') as string;
-    const oldImageUrl = formData.get('url') as string;
+    const categoryId = validateFuctionSchema(idSchema, formData.get('id'));
 
     const validateImageFile = validateFuctionSchema(imageSchema, { image });
 
+    const category = await db.category.findUnique({ where: { id: categoryId }, select: { image: true } });
+    if (!category) throw new Error("Category not found");
+
     const fullImagePath = await uploadImage(validateImageFile.image);
 
-    await deleteImage(oldImageUrl);
+    if (category.image) await deleteImage(category.image);
     await db.category.update({
       where: {
         id: categoryId,

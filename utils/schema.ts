@@ -10,7 +10,7 @@ export const productSchema = zod.object({
 
     ).max(30,
         {
-            message: "Name must be at most 10 characters long"
+            message: "Name must be at most 30 characters long"
         }
     ),
 
@@ -60,14 +60,15 @@ export function validateFuctionSchema<T>(schema: zod.ZodSchema<T>, data: unknown
 
 function validateImageFile() {
     const imageSize = 1024 * 1024;
-    const acceptedFileType = ['image/']
+    // explicit allow-list: "image/*" would also accept SVG, which can carry scripts (stored XSS)
+    const acceptedFileType = ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif']
 
     return zod.instanceof(File).refine((file) => {
         return !file || file.size <= imageSize
     }, 'File size must be less than 1 MB')
 
         .refine((file) => { //refine means custom validation
-            return !file || acceptedFileType.some((type) => file.type.startsWith(type));
+            return !file || acceptedFileType.includes(file.type);
         }, 'File  must be an image')
 }
 //imageSchema
@@ -89,12 +90,6 @@ export const reviewSchema = zod.object({
     productId: zod.string().refine((value) => value !== '', {
         message: "Product Id cannot be empty"
     }),
-    authorName: zod.string().refine((value) => value !== '', {
-        message: "Author name cannot be empty"
-    }),
-    authorImageUrl: zod.string().refine((value) => value !== '', {
-        message: "Author image URL cannot be empty"
-    }),
 })
 
 
@@ -110,3 +105,11 @@ export const categorySchema = zod.object({
         message: "Description must be at most 300 characters long"
     }).optional(),
 })
+// ids that reach the database from forms / action arguments
+export const idSchema = zod.string().trim().min(1, 'Invalid id').max(64, 'Invalid id')
+
+// quantity of a single cart line
+export const cartAmountSchema = zod.coerce.number()
+    .int('Amount must be a whole number')
+    .min(1, 'Amount must be at least 1')
+    .max(100, 'Amount must be at most 100')

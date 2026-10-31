@@ -2,18 +2,10 @@
 import CartItemsList from '@/components/cart/CartItemsList';
 import CartTotals from '@/components/cart/CartTotals';
 import SectionTitle from '@/components/global/SectionTitle';
-import { fetchOrCreateCart, updateCart } from '@/utils/actions';
-import { auth } from '@clerk/nextjs/server';
-import { redirect } from 'next/navigation';
+import { fetchUserCart } from '@/utils/actions';
 
 async function CartPage() {
-  const { userId } = await auth();
-
-  if (!userId) redirect('/');
-
-  const previousCart = await fetchOrCreateCart({ userId });
-
-  const { currentCart, cartItems } = await updateCart(previousCart);
+  const { currentCart, cartItems } = await fetchUserCart();
   
   if (cartItems.length === 0) return <SectionTitle text='Empty Cart' />;
 

@@ -10,14 +10,15 @@ export const supabase = createClient(
 
 export const uploadImage = async (image: File) => {
 
-    const timeTamp = Date.now();
-    const newName = `${timeTamp}-${image.name}`;  //crate a unique filename
+    // the client-supplied filename is never trusted: random name + extension from the validated MIME type
+    const extension = image.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'img';
+    const newName = `${Date.now()}-${crypto.randomUUID()}.${extension}`;
 
     const { data, error } = await supabase
         .storage.from(bucket)
-        .upload(newName, image, { cacheControl: '3600' });
+        .upload(newName, image, { cacheControl: '3600', contentType: image.type });
 
-    if (!data) throw new Error('Image upload failed');
+    if (error || !data) throw new Error('Image upload failed');
     
     return supabase.storage.from(bucket).getPublicUrl(newName).data.publicUrl;
 
